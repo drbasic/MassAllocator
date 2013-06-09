@@ -17,7 +17,7 @@ public:
     typedef T* pointer;
 
     /// онструктор. 
-    MassAllocator(unsigned int blockSize = 65536);
+    MassAllocator(unsigned int blockSize = 1024 * 128);
     ///ƒеструктор.
     ~MassAllocator();
 
@@ -37,11 +37,24 @@ public:
     class Iterator
     {
     public:
+        typedef typename std::random_access_iterator_tag iterator_category;
+        typedef typename T value_type;
+        typedef typename size_t difference_type;
+        typedef typename T* pointer;
+        typedef typename T& reference;
+
         ///ѕеремещает итератор на следующий элемент хранилища
-        void operator++();
+        Iterator& operator++();
+        Iterator operator++(int);
 
         ///ѕеремещает итератор на предыдущий элемент хранилища
-        void operator--();
+        Iterator& operator--();
+        Iterator operator--(int);
+
+        difference_type operator-(const Iterator &rh) const;
+        Iterator operator-(difference_type offset) const;
+
+        Iterator operator+(difference_type offset) const;
 
         ///¬озвращает указатель на элемент, на котором находитс€ итератор
         pointer operator->();
@@ -51,6 +64,9 @@ public:
 
         ///–авенство итераторов
         bool operator==(const Iterator &rh) const;
+
+        ///—равнение итераторов на меньше
+        bool operator<(const Iterator &rh) const;
 
         ///Ќеравенство итераторов
         bool operator!=(const Iterator &rh) const;
@@ -93,6 +109,18 @@ private:
 
     ///«адает значение сквозного индекс по номеру блока и индексу в блоке.
     void setIndex(unsigned int blockIndx, unsigned int itemIndex);
+
+    union From64to2x32
+    {
+        uint64 a;
+        struct B
+        {
+            unsigned int itemIndex;
+            unsigned int blockIndx;
+        };
+        B b;
+    };
+
 };
 
 template <typename T>
@@ -120,15 +148,18 @@ template <typename T>
 typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *returningIndex)
 {
     //получаем новый полный индекс
-    auto index = curAtomicIndex_.fetch_add(1);
-    //определ€ем номер блока
-    unsigned int blockIndx = index >> 32;
+    auto index = curAtomicIndex_++;
     //определ€ем индекс в блоке
     unsigned int itemIndex = index & 0xffffffff;
+    //номер блока
+    unsigned int blockIndx = index >> 32;;
 
     //если индекс элемента в блоке входит в допустимые пределы, то мы быстренько возвращаем индекс и указатель выделенного элемента
     if(itemIndex < elementsInBlockCount_)
     {
+        ////определ€ем номер блока
+        //blockIndx 
+
         if (returningIndex != nullptr)
             *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
         return &(blocks_[blockIndx][itemIndex]);
@@ -136,7 +167,7 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
 
     if (itemIndex == elementsInBlockCount_)
     {
-        //нам нужно выделить еще один блок пам€ти
+        //на нас закончилс€ блок и именно нашему потоку нужно выделить еще один блок пам€ти
         auto bufferSize = elementsInBlockCount_ * sizeof(T);
         T* buffer = (T*)malloc(bufferSize);
         memset(buffer, 0, bufferSize);
@@ -152,25 +183,29 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
         return &(blocks_[blockIndx][itemIndex]);
     }
 
-    //ждем пока другой поток производит выделение нового блока
+    //ждем, пока другой поток производит выделение нового блока
     while(true)
     {
         //получаем новый полный индекс
-        index = curAtomicIndex_.fetch_add(1);
-        //определ€ем номер блока
-        blockIndx = index >> 32;
+        index = curAtomicIndex_++;
         //определ€ем индекс в блоке
         itemIndex = index & 0xffffffff;
         
-        if ((unsigned int)itemIndex == 0xffffffff)
+        if (itemIndex == 0xffffffff)
             //мы крутили цикл ожидани€ настолько долго, что произошло переполнение
             throw std::string("Atomic index overflow");
         
         if (itemIndex >= elementsInBlockCount_)
+        {
             //блок еще не выделен, продолжаем ожидание
+            std::this_thread::yield();
             continue;
+        }
         
-        //блок выделен другим потоком, мы захватили валидный индекс элемента
+        //определ€ем номер блока
+        blockIndx = index >> 32;
+        
+        //блок был выделен другим потоком, мы захватили валидный индекс элемента из нового блока
         if (returningIndex != nullptr)
             *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
         return &(blocks_[blockIndx][itemIndex]);
@@ -180,16 +215,16 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
 template <typename T>
 typename MassAllocator<T>::reference MassAllocator<T>::operator[](size_type index)
 {
-    int indexOfBlock = index / elementsInBlockCount_;
-    int indexInBlock = index % elementsInBlockCount_;
+    size_t indexOfBlock = index / elementsInBlockCount_;
+    size_t indexInBlock = index % elementsInBlockCount_;
     return blocks_[indexOfBlock][indexInBlock];
 }
 
 template <typename T>
 typename MassAllocator<T>::const_reference MassAllocator<T>::operator[](size_type index) const
 {
-    int indexOfBlock = index / elementsInBlockCount_;
-    int indexInBlock = index % elementsInBlockCount_;
+    size_t indexOfBlock = index / elementsInBlockCount_;
+    size_t indexInBlock = index % elementsInBlockCount_;
     return blocks_[indexOfBlock][indexInBlock];
 }
 
@@ -241,15 +276,55 @@ void MassAllocator<T>::clear()
 //=============================================================================
 
 template <typename T>
-void MassAllocator<T>::Iterator::operator++()
+typename MassAllocator<T>::Iterator& MassAllocator<T>::Iterator::operator++()
 {
     ++index_;
+    return *this;
 }
 
 template <typename T>
-void MassAllocator<T>::Iterator::operator--()
+typename MassAllocator<T>::Iterator MassAllocator<T>::Iterator::operator++(int)
+{
+    Iterator result(*this);
+    ++index_;
+    return result;
+}
+
+template <typename T>
+typename MassAllocator<T>::Iterator& MassAllocator<T>::Iterator::operator--()
 {
     --index_;
+    return *this;
+}
+
+template <typename T>
+typename MassAllocator<T>::Iterator MassAllocator<T>::Iterator::operator--(int)
+{
+    Iterator result(*this);
+    --index_;
+    return result;
+}
+
+template <typename T>
+typename MassAllocator<T>::Iterator::difference_type MassAllocator<T>::Iterator::operator-(const Iterator &rh) const
+{
+    return index_ - rh.index_;
+}
+
+template <typename T>
+typename MassAllocator<T>::Iterator MassAllocator<T>::Iterator::operator-(typename MassAllocator<T>::Iterator::difference_type offset) const
+{
+    MassAllocator<T>::Iterator result(*this);
+    result.index_ -= offset;
+    return result;
+}
+
+template <typename T>
+typename MassAllocator<T>::Iterator MassAllocator<T>::Iterator::operator+(typename MassAllocator<T>::Iterator::difference_type offset) const
+{
+    MassAllocator<T>::Iterator result(*this);
+    result.index_ += offset;
+    return result;
 }
 
 template <typename T>
@@ -268,6 +343,12 @@ template <typename T>
 bool MassAllocator<T>::Iterator::operator==(const Iterator &rh) const
 {
     return index_ == rh.index_;
+}
+
+template <typename T>
+bool MassAllocator<T>::Iterator::operator<(const Iterator &rh) const
+{
+    return index_ < rh.index_;
 }
 
 template <typename T>
