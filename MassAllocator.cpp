@@ -24,10 +24,9 @@ void measureTime(F f, std::string message)
 int _tmain(int argc, _TCHAR* argv[])
 {
     const int N = 10000000;
-    const int N2 = N;
     const int ThreadCount = 8;
 
-    {
+    {//проверка выделения объектов через MassAllocator
         auto allocationStart = clock();
         MassAllocator<ObjectA> heap1;
         std::cout << "is_lock_free = " << (heap1.is_lock_free() ? std::string("true") : std::string("false")) << std::endl;
@@ -140,8 +139,7 @@ int _tmain(int argc, _TCHAR* argv[])
         std::cout << "Check allocation continuity finished with success!" << std::endl;
     }
 
-    //проверка выделения объектов через стандартный менеджер памяти
-    {
+    {//проверка выделения объектов через стандартный менеджер памяти
         auto allocationStart = clock();
         std::vector<std::vector<ObjectA*>> allocatedObjects;
         allocatedObjects.resize(ThreadCount);
@@ -150,15 +148,15 @@ int _tmain(int argc, _TCHAR* argv[])
             (int threadIndex)
             {
                 auto &objects = allocatedObjects[threadIndex];
-                objects.reserve(N2);
-                for(int i = 0; i < N2; ++i)
+                objects.reserve(N);
+                for(int i = 0; i < N; ++i)
                 {
                     auto obj = new ObjectA();
                     obj->a = i;
                     objects.push_back(obj);
                 }
 
-                std::cout << " Thread " << std::this_thread::get_id()<< " allocated " << N2 << std::endl;
+                std::cout << " Thread " << std::this_thread::get_id()<< " allocated " << N << std::endl;
             };
     
         typedef std::shared_ptr<std::thread> ThreadPtr;
