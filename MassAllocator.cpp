@@ -1,4 +1,4 @@
-#include <iostream>
+п»ї#include <iostream>
 #include <array>
 #include <thread>
 #include <memory>
@@ -26,15 +26,15 @@ int _tmain(int argc, _TCHAR* argv[])
     const int N = 10000000;
     const int ThreadCount = 8;
 
-    {//проверка выделения объектов через MassAllocator
+    {//РїСЂРѕРІРµСЂРєР° РІС‹РґРµР»РµРЅРёСЏ РѕР±СЉРµРєС‚РѕРІ С‡РµСЂРµР· MassAllocator
         auto allocationStart = clock();
         MassAllocator<ObjectA> heap1;
         std::cout << "is_lock_free = " << (heap1.is_lock_free() ? std::string("true") : std::string("false")) << std::endl;
         std::cout << "Object size " << sizeof(ObjectA) << " bytes, allocate for " << N * ThreadCount<< " objects in " << ThreadCount << " threads, total objects size = " << sizeof(ObjectA) * N * ThreadCount / (1024 * 1024.0) << "MB" << std::endl;
 
-        //сюда будем складывать все полученный индексы выделенных объектов
+        //СЃСЋРґР° Р±СѓРґРµРј СЃРєР»Р°РґС‹РІР°С‚СЊ РІСЃРµ РїРѕР»СѓС‡РµРЅРЅС‹Р№ РёРЅРґРµРєСЃС‹ РІС‹РґРµР»РµРЅРЅС‹С… РѕР±СЉРµРєС‚РѕРІ
         std::array<std::vector<size_t>, ThreadCount> allocatedIndxs;
-        //функция для потока
+        //С„СѓРЅРєС†РёСЏ РґР»СЏ РїРѕС‚РѕРєР°
         auto func = 
             [&]
             (int threadIndx)
@@ -44,7 +44,7 @@ int _tmain(int argc, _TCHAR* argv[])
                 for(int i = 0; i < N; ++i)
                 {
                     size_t indx;
-                    //запрашиваем новый элемент и индекс этого элемента
+                    //Р·Р°РїСЂР°С€РёРІР°РµРј РЅРѕРІС‹Р№ СЌР»РµРјРµРЅС‚ Рё РёРЅРґРµРєСЃ СЌС‚РѕРіРѕ СЌР»РµРјРµРЅС‚Р°
                     ObjectA *obj = heap1.createElement(&indx);
                     obj->a = i;
                     indxs.push_back(indx);
@@ -53,13 +53,13 @@ int _tmain(int argc, _TCHAR* argv[])
                 std::cout << " Thread " << std::this_thread::get_id()<< " allocated " << N << " objects" << std::endl;
             };
 
-        //запускаем потоки 
+        //Р·Р°РїСѓСЃРєР°РµРј РїРѕС‚РѕРєРё 
         typedef std::shared_ptr<std::thread> ThreadPtr;
         std::vector<ThreadPtr> threads;
         for(int i = 0; i < ThreadCount; ++i)
             threads.push_back(ThreadPtr(new std::thread(func, i)));
     
-        //дожидаемся завершения всех потоков
+        //РґРѕР¶РёРґР°РµРјСЃСЏ Р·Р°РІРµСЂС€РµРЅРёСЏ РІСЃРµС… РїРѕС‚РѕРєРѕРІ
         for(auto ii = threads.begin(), ie = threads.end(); ii != ie; ++ii)
             (*ii)->join();
 
@@ -71,7 +71,7 @@ int _tmain(int argc, _TCHAR* argv[])
                 [&]
                 ()
                 {
-                    //обработка элементов index-like
+                    //РѕР±СЂР°Р±РѕС‚РєР° СЌР»РµРјРµРЅС‚РѕРІ index-like
                     for(size_t i = 0, n = heap1.size(); i < n; ++i)
                         heap1[i].a += 1;
                 };
@@ -82,7 +82,7 @@ int _tmain(int argc, _TCHAR* argv[])
                 [&]
                 ()
                 {
-                    //обработка элементов iterator-like
+                    //РѕР±СЂР°Р±РѕС‚РєР° СЌР»РµРјРµРЅС‚РѕРІ iterator-like
                     for(auto ii = heap1.begin(), ie = heap1.end(); ii != ie; ++ii)
                         ii->b[0] = ii->a * 42;
                 };
@@ -112,25 +112,25 @@ int _tmain(int argc, _TCHAR* argv[])
         auto deallocTime = (double) (deallocationEnd - deallocationStart) / CLOCKS_PER_SEC;
         std::cout << "Allocation and deallocation " << N * ThreadCount << " objects took " << allocTime << "+" << deallocTime << " = " <<allocTime + deallocTime << "sec" << std::endl;
 
-        //проверяем корректность выделения объектов.
+        //РїСЂРѕРІРµСЂСЏРµРј РєРѕСЂСЂРµРєС‚РЅРѕСЃС‚СЊ РІС‹РґРµР»РµРЅРёСЏ РѕР±СЉРµРєС‚РѕРІ.
         std::cout << "Check allocation continuity" << std::endl;
         std::vector<size_t> threadsCurrentIndx;
         threadsCurrentIndx.resize(ThreadCount);
         for(size_t i = 0, n = N * ThreadCount; i < n; ++i)
         {
-            //ищем какой поток сделал захват индекса i
+            //РёС‰РµРј РєР°РєРѕР№ РїРѕС‚РѕРє СЃРґРµР»Р°Р» Р·Р°С…РІР°С‚ РёРЅРґРµРєСЃР° i
             for(int j = 0; j <= ThreadCount; ++j)
             {
-                //Диагностируем ошибку, когда ни один из потоков не захватил элемент i 
+                //Р”РёР°РіРЅРѕСЃС‚РёСЂСѓРµРј РѕС€РёР±РєСѓ, РєРѕРіРґР° РЅРё РѕРґРёРЅ РёР· РїРѕС‚РѕРєРѕРІ РЅРµ Р·Р°С…РІР°С‚РёР» СЌР»РµРјРµРЅС‚ i 
                 if (j == ThreadCount)
                     throw std::string("allocation error");
-                //пропускаем поток, в котром уже проверили все элементы
+                //РїСЂРѕРїСѓСЃРєР°РµРј РїРѕС‚РѕРє, РІ РєРѕС‚СЂРѕРј СѓР¶Рµ РїСЂРѕРІРµСЂРёР»Рё РІСЃРµ СЌР»РµРјРµРЅС‚С‹
                 if (threadsCurrentIndx[j] == N)
                     continue;
-                //проверяем что поток j захватил элемент i
+                //РїСЂРѕРІРµСЂСЏРµРј С‡С‚Рѕ РїРѕС‚РѕРє j Р·Р°С…РІР°С‚РёР» СЌР»РµРјРµРЅС‚ i
                 if (allocatedIndxs[j][threadsCurrentIndx[j]] != i)
                     continue;
-                //да, поток j захватил элемент i. перемещаемся к его следующему элементу
+                //РґР°, РїРѕС‚РѕРє j Р·Р°С…РІР°С‚РёР» СЌР»РµРјРµРЅС‚ i. РїРµСЂРµРјРµС‰Р°РµРјСЃСЏ Рє РµРіРѕ СЃР»РµРґСѓСЋС‰РµРјСѓ СЌР»РµРјРµРЅС‚Сѓ
                 ++threadsCurrentIndx[j];
                 break;
             }
@@ -139,7 +139,7 @@ int _tmain(int argc, _TCHAR* argv[])
         std::cout << "Check allocation continuity finished with success!" << std::endl;
     }
 
-    {//проверка выделения объектов через стандартный менеджер памяти
+    {//РїСЂРѕРІРµСЂРєР° РІС‹РґРµР»РµРЅРёСЏ РѕР±СЉРµРєС‚РѕРІ С‡РµСЂРµР· СЃС‚Р°РЅРґР°СЂС‚РЅС‹Р№ РјРµРЅРµРґР¶РµСЂ РїР°РјСЏС‚Рё
         auto allocationStart = clock();
         std::vector<std::vector<ObjectA*>> allocatedObjects;
         allocatedObjects.resize(ThreadCount);
