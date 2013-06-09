@@ -109,17 +109,6 @@ private:
 
     ///Задает значение сквозного индекс по номеру блока и индексу в блоке.
     void setIndex(unsigned int blockIndx, unsigned int itemIndex);
-
-    union From64to2x32
-    {
-        uint64 a;
-        struct B
-        {
-            unsigned int itemIndex;
-            unsigned int blockIndx;
-        } b;
-    };
-
 };
 
 template <typename T>
@@ -146,19 +135,27 @@ void MassAllocator<T>::setIndex(unsigned int blockIndx, unsigned int itemIndex)
 template <typename T>
 typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *returningIndex)
 {
+    //Делаем union для доступа к старшим и младшим 32 битам 64 битного целого
+    union {
+        uint64_t index;
+        struct {
+            uint32_t itemIndex;
+            uint32_t blockIndx;
+        };
+    };
     //получаем новый полный индекс
-    From64to2x32 index;
-    index.a = curAtomicIndex_++;
+    index = curAtomicIndex_++;
+    //index = curAtomicIndex_.fetch_add(1, std::memory_order_relaxed);
 
     //если индекс элемента в блоке входит в допустимые пределы, то мы быстренько возвращаем индекс и указатель выделенного элемента
-    if(index.b.itemIndex < elementsInBlockCount_)
+    if(itemIndex < elementsInBlockCount_)
     {
         if (returningIndex != nullptr)
-            *returningIndex = index.b.blockIndx * elementsInBlockCount_ + index.b.itemIndex;
-        return &(blocks_[index.b.blockIndx][index.b.itemIndex]);
+            *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
+        return &(blocks_[blockIndx][itemIndex]);
     }
 
-    if (index.b.itemIndex == elementsInBlockCount_)
+    if (itemIndex == elementsInBlockCount_)
     {
         //на нас закончился блок и именно нашему потоку нужно выделить еще один блок памяти
         auto bufferSize = elementsInBlockCount_ * sizeof(T);
@@ -167,26 +164,27 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
         blocks_.push_back(buffer);
         
         //мы забираем себе нулевой элемент в блоке
-        index.b.blockIndx = (unsigned int)(blocks_.size() - 1);
-        index.b.itemIndex = 0;
+        blockIndx = (unsigned int)(blocks_.size() - 1);
+        itemIndex = 0;
         if (returningIndex != nullptr)
-            *returningIndex = index.b.blockIndx * elementsInBlockCount_ + index.b.itemIndex;
+            *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
         //устанавливаем счетчик на первый элемент в блоке
-        setIndex(index.b.blockIndx, 1);
-        return &(blocks_[index.b.blockIndx][index.b.itemIndex]);
+        setIndex(blockIndx, 1);
+        return &(blocks_[blockIndx][itemIndex]);
     }
 
     //ждем, пока другой поток производит выделение нового блока
     while(true)
     {
         //получаем новый полный индекс
-        index.a = curAtomicIndex_++;
+        index = curAtomicIndex_++;
+        //index = curAtomicIndex_.fetch_add(1, std::memory_order_relaxed);
         
-        if (index.b.itemIndex == 0xffffffff)
+        if (itemIndex == 0xffffffff)
             //мы крутили цикл ожидания настолько долго, что произошло переполнение
             throw std::string("Atomic index overflow");
         
-        if (index.b.itemIndex >= elementsInBlockCount_)
+        if (itemIndex >= elementsInBlockCount_)
         {
             //блок еще не выделен, продолжаем ожидание
             std::this_thread::yield();
@@ -195,8 +193,8 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
         
         //блок был выделен другим потоком, мы захватили валидный индекс элемента из нового блока
         if (returningIndex != nullptr)
-            *returningIndex = index.b.blockIndx * elementsInBlockCount_ + index.b.itemIndex;
-        return &(blocks_[index.b.blockIndx][index.b.itemIndex]);
+            *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
+        return &(blocks_[blockIndx][itemIndex]);
     }
 }
 
