@@ -23,7 +23,7 @@ void measureTime(F f, std::string message)
 
 int _tmain(int argc, _TCHAR* argv[])
 {
-    const int N = 10000000;
+    const int N = 5000000;
     const int ThreadCount = 8;
 
     {//проверка выделения объектов через MassAllocator

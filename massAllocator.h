@@ -2,6 +2,8 @@
 #include <vector>
 #include <string>
 #include <atomic>
+#include <cstdlib>
+#include <thread>
 
 /*! \brief Хранилище для объектов с быстрым выделением нового элемента. 
 *Поддерживаются только операции выделеления нового элемента и полной очистки.
@@ -38,10 +40,10 @@ public:
     {
     public:
         typedef typename std::random_access_iterator_tag iterator_category;
-        typedef typename T value_type;
-        typedef typename size_t difference_type;
-        typedef typename T* pointer;
-        typedef typename T& reference;
+        typedef T value_type;
+        typedef size_t difference_type;
+        typedef T* pointer;
+        typedef T& reference;
 
         ///Перемещает итератор на следующий элемент хранилища
         Iterator& operator++();
@@ -94,10 +96,10 @@ public:
     ///Возвращает потребление памяти
     size_t memUse() const;
 private:
+    //Запрет копирования
     MassAllocator(const MassAllocator &);
     MassAllocator& operator=(const MassAllocator &);
 
-    typedef unsigned long long uint64;
     ///Количество элементов в блоке.
     unsigned int elementsInBlockCount_;
     ///Блоки с элементами.
@@ -105,7 +107,7 @@ private:
 
     ///Сквозной индекс для захвата следующего свободного элемента.
     ///Cтаршие 32 бита это индекс блока, а нижние 32 бита - индекс элемента в блоке.
-    std::atomic<uint64> curAtomicIndex_;
+    std::atomic<uint64_t> curAtomicIndex_;
 
     ///Задает значение сквозного индекс по номеру блока и индексу в блоке.
     void setIndex(unsigned int blockIndx, unsigned int itemIndex);
@@ -128,7 +130,7 @@ MassAllocator<T>::~MassAllocator()
 template <typename T>
 void MassAllocator<T>::setIndex(unsigned int blockIndx, unsigned int itemIndex)
 {
-    auto a = (((uint64)blockIndx) << 32) + itemIndex;
+    auto a = (((uint64_t)blockIndx) << 32) + itemIndex;
     curAtomicIndex_.store(a);
 }
 
@@ -138,24 +140,23 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
     //Делаем union для доступа к старшим и младшим 32 битам 64 битного целого
     union {
         uint64_t index;
-        struct {
+        struct HiLoParts {
             uint32_t itemIndex;
             uint32_t blockIndx;
-        };
+        } parts;
     };
     //получаем новый полный индекс
     index = curAtomicIndex_++;
-    //index = curAtomicIndex_.fetch_add(1, std::memory_order_relaxed);
 
     //если индекс элемента в блоке входит в допустимые пределы, то мы быстренько возвращаем индекс и указатель выделенного элемента
-    if(itemIndex < elementsInBlockCount_)
+    if(parts.itemIndex < elementsInBlockCount_)
     {
         if (returningIndex != nullptr)
-            *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
-        return &(blocks_[blockIndx][itemIndex]);
+            *returningIndex = parts.blockIndx * elementsInBlockCount_ + parts.itemIndex;
+        return &(blocks_[parts.blockIndx][parts.itemIndex]);
     }
 
-    if (itemIndex == elementsInBlockCount_)
+    if (parts.itemIndex == elementsInBlockCount_)
     {
         //на нас закончился блок и именно нашему потоку нужно выделить еще один блок памяти
         auto bufferSize = elementsInBlockCount_ * sizeof(T);
@@ -164,13 +165,13 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
         blocks_.push_back(buffer);
         
         //мы забираем себе нулевой элемент в блоке
-        blockIndx = (unsigned int)(blocks_.size() - 1);
-        itemIndex = 0;
+        parts.blockIndx = (unsigned int)(blocks_.size() - 1);
+        parts.itemIndex = 0;
         if (returningIndex != nullptr)
-            *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
+            *returningIndex = parts.blockIndx * elementsInBlockCount_ + parts.itemIndex;
         //устанавливаем счетчик на первый элемент в блоке
-        setIndex(blockIndx, 1);
-        return &(blocks_[blockIndx][itemIndex]);
+        setIndex(parts.blockIndx, 1);
+        return &(blocks_[parts.blockIndx][parts.itemIndex]);
     }
 
     //ждем, пока другой поток производит выделение нового блока
@@ -178,13 +179,11 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
     {
         //получаем новый полный индекс
         index = curAtomicIndex_++;
-        //index = curAtomicIndex_.fetch_add(1, std::memory_order_relaxed);
-        
-        if (itemIndex == 0xffffffff)
+        if (parts.itemIndex == 0xffffffff)
             //мы крутили цикл ожидания настолько долго, что произошло переполнение
             throw std::string("Atomic index overflow");
         
-        if (itemIndex >= elementsInBlockCount_)
+        if (parts.itemIndex >= elementsInBlockCount_)
         {
             //блок еще не выделен, продолжаем ожидание
             std::this_thread::yield();
@@ -193,8 +192,8 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
         
         //блок был выделен другим потоком, мы захватили валидный индекс элемента из нового блока
         if (returningIndex != nullptr)
-            *returningIndex = blockIndx * elementsInBlockCount_ + itemIndex;
-        return &(blocks_[blockIndx][itemIndex]);
+            *returningIndex = parts.blockIndx * elementsInBlockCount_ + parts.itemIndex;
+        return &(blocks_[parts.blockIndx][parts.itemIndex]);
     }
 }
 
