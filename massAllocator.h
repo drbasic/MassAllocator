@@ -155,12 +155,14 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
             *returningIndex = parts.blockIndx * elementsInBlockCount_ + parts.itemIndex;
         return &(blocks_[parts.blockIndx][parts.itemIndex]);
     }
-
+    commitBlock:
     if (parts.itemIndex == elementsInBlockCount_)
     {
         //на нас закончился блок и именно нашему потоку нужно выделить еще один блок памяти
         auto bufferSize = elementsInBlockCount_ * sizeof(T);
         T* buffer = (T*)malloc(bufferSize);
+        if (buffer == nullptr)
+            throw std::bad_alloc();
         memset(buffer, 0, bufferSize);
         blocks_.push_back(buffer);
         
@@ -175,26 +177,28 @@ typename MassAllocator<T>::pointer MassAllocator<T>::createElement(size_type *re
     }
 
     //ждем, пока другой поток производит выделение нового блока
-    while(true)
+    do
     {
-        //получаем новый полный индекс
-        index = curAtomicIndex_++;
-        if (parts.itemIndex == 0xffffffff)
-            //мы крутили цикл ожидания настолько долго, что произошло переполнение
-            throw std::string("Atomic index overflow");
-        
-        if (parts.itemIndex >= elementsInBlockCount_)
+        do
         {
-            //блок еще не выделен, продолжаем ожидание
+            // блок еще не выделен, продолжаем ожидание relaxed-чтением
             std::this_thread::yield();
-            continue;
-        }
+            index = curAtomicIndex_.load(std::memory_order_relaxed);
+        } while (parts.itemIndex > elementsInBlockCount_);
         
-        //блок был выделен другим потоком, мы захватили валидный индекс элемента из нового блока
-        if (returningIndex != nullptr)
-            *returningIndex = parts.blockIndx * elementsInBlockCount_ + parts.itemIndex;
-        return &(blocks_[parts.blockIndx][parts.itemIndex]);
-    }
+        //блок был выделен, резервируем элемент
+        index = curAtomicIndex_++;
+    } while (parts.itemIndex > elementsInBlockCount_);
+     
+    if (parts.itemIndex == elementsInBlockCount_)
+        //нам не повезло, к моменту пока мы очнулись именно на нас закончился блок
+        goto commitBlock;
+
+    //блок был выделен другим потоком, мы захватили валидный индекс элемента из нового блока
+    if (returningIndex != nullptr)
+        *returningIndex = parts.blockIndx * elementsInBlockCount_ + parts.itemIndex;
+    return &(blocks_[parts.blockIndx][parts.itemIndex]);
+
 }
 
 template <typename T>
